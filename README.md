@@ -1,6 +1,6 @@
 # Breaking the Lens of the Telescope: Online Relevance Estimation over Large Retrieval Sets
 
-This is the official Github repository for our paper [Breaking the Lens of the Telescope: Online Relevance Estimation over Large Retrieval Sets](https://arxiv.org/pdf/2504.09353)  accepted in 48th International ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR 2025), Padua, Italy, 13-17 July 2025,
+This is the official Github repository for our paper [Breaking the Lens of the Telescope: Online Relevance Estimation over Large Retrieval Sets](https://arxiv.org/pdf/2504.09353) in 48th International ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR 2025), Padua, Italy, 13-17 July 2025,
 
 
 
@@ -69,3 +69,5 @@ python3 run_adaptive.py --budget 100 --s 30 --dl 19 --ce 7 --s1 25 --s2 15
   year={2025}
 }
 ```
+
+

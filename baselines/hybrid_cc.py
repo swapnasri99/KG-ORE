@@ -20,7 +20,7 @@ class HybridCC(pt.Transformer):
         cross_enc_budget: int = 7,
         df2: pd.DataFrame = None,
         batch_size: Optional[int] = None,
-        backfill: bool = True,
+        backfill: bool = False,
         verbose: bool = True):
 
         self.scorer = scorer

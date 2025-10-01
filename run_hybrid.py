@@ -19,7 +19,9 @@ import random
 parser = argparse.ArgumentParser()
 parser.add_argument("--lk", type=int, default=16, help="the value of k for selecting k neighbourhood graph")
 parser.add_argument("--dl", type=int, default=19, help="dl 19 or 20")
+parser.add_argument("--graph_name", type=str, default="gbm25", help="name of the graph")
 parser.add_argument("--budget", type=int, default=100, help="budget c")
+parser.add_argument("--batch", type=int, default=16, help="batch size")
 parser.add_argument("--ce", type=int, default=7, help="number of cross encoder calls")
 parser.add_argument("--s", type=int, default=30, help="top s docs (S) to calculate the set affinity.")
 parser.add_argument("--verbose", action="store_true", help="if show progress bar.")
@@ -96,7 +98,7 @@ result = pt.Experiment(
 
         ],
     dataset.get_topics(),
-    dataset.qrels,
+    dataset.get_qrels(),
     [nDCG@10, nDCG@args.budget, R(rel=2)@args.budget],
     names=[
         f"rrf_bm25_tct.c{args.budget}",
