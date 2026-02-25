@@ -59,33 +59,33 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Device: {device}")
 
 # ============================================================
-# Load Components
+# Load  all the Components
 # ============================================================
 
 print("\n" + "=" * 60)
 print("Loading Components")
 print("=" * 60)
 
-print("[1/6] TasB encoder...")
+print("TasB encoder...")
 model = TasB.dot(batch_size=1, device=device)
 
-print("[2/6] FlexIndex...")
+print("FlexIndex ")
 idx_art = pta.Artifact.from_hf('macavaney/msmarco-passage.tasb.flex')
 idx = FlexIndex(idx_art.path)
 
-print("[3/6] BM25 retriever...")
+print("BM25 retriever...")
 bm25 = pt.terrier.Retriever.from_dataset(
     'msmarco_passage', 'terrier_stemmed', wmodel='BM25', num_results=args.budget
 )
 
-print("[4/6] Corpus graphs...")
+print("Corpus graphs...")
 graph = pta.Artifact.from_hf('macavaney/msmarco-passage.corpusgraph.bm25.16')
 laff_graph = pta.Artifact.from_hf('macavaney/msmarco-passage.corpusgraph.bm25.128.laff')
 
-print("[5/6] MonoT5 scorer...")
+print("MonoT5 scorer...")
 scorer = pt.text.get_text(dataset, 'text') >> MonoT5ReRanker(verbose=args.verbose, batch_size=args.batch)
 
-print("[6/6] Evaluation dataset (TREC-DL 20{})...".format(args.dl))
+print(" Evaluation dataset (TREC-DL 20{})...".format(args.dl))
 eval_dataset = pt.get_dataset(f'irds:msmarco-passage/trec-dl-20{args.dl}/judged')
 
 print("✓ All components loaded\n")
