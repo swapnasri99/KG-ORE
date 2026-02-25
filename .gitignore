@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+#Huge Files
+entity_linking_results/
+freebase/
+
 # Distribution / packaging
 .Python
 env/
