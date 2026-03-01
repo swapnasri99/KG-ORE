@@ -138,3 +138,56 @@ run.py
 ore/
 example_main.py
 run_hybrid_local.py
+
+# ---- Databases ----
+*.db
+*.sqlite
+*.sqlite3
+
+# Specific large DBs
+freebase_1hop.db
+freebase_1hop_clean.db
+passage_entities.db
+
+# ---- PyTerrier / Index files ----
+*.data
+*.index
+*.properties
+*.vecs
+
+# ---- Model files ----
+*.safetensors
+*.bin
+*.pt
+
+# ---- Logs / Results ----
+results/
+logs/
+*.log
+*.out
+
+# ---- Python cache ----
+__pycache__/
+*.pyc
+.venv/
+.db-shm 
+-db-wal
+
+
+# ---- MS MARCO downloads ----
+.ir_datasets/
+passage_entities.db-shm
+passage_entities.db-wal
+entity_linking_results/msmarco_passage_with_id.jsonl
+entity_linking_results/passage_test_with_id_bm25rank1000.jsonl
+freebase/ent2id.pickle
+freebase/subgraph_1hop_triples.npy
+entity_linking_results/query_dev_full_test_with_id.jsonl
+freebase/rel2id.pickle
+.gitignore
+runs/adaptive/dl19/kg_ore/nolaff_bm25graph128/ORE_G0.0_E0.0_K1.0.c50.DL19.res.gz
+runs/adaptive/dl19/kg_ore/nolaff_bm25graph128/ORE_G0.0_E0.5_K0.5.c50.DL19.res.gz
+runs/adaptive/dl19/kg_ore/nolaff_bm25graph128/ORE_G0.0_E0.5_K0.5.c20.DL19.res.gz
+freebase_1hop_clean.db-shm
+freebase_1hop_clean.db-wal
+runs/adaptive/dl19/kg_ore/nolaff_bm25graph128/ORE_G0.2_E0.0_K0.8.c50.DL19.res.gz
