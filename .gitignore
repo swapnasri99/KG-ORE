@@ -191,3 +191,5 @@ runs/adaptive/dl19/kg_ore/nolaff_bm25graph128/ORE_G0.0_E0.5_K0.5.c20.DL19.res.gz
 freebase_1hop_clean.db-shm
 freebase_1hop_clean.db-wal
 runs/adaptive/dl19/kg_ore/nolaff_bm25graph128/ORE_G0.2_E0.0_K0.8.c50.DL19.res.gz
+ORE_Appendix.pdf
+SIGIR_Slides.pdf

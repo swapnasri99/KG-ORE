@@ -10,3 +10,9 @@ python run_experiment_unified.py \
   --passage_el_db passage_entities.db \
   --freebase_dir freebase/ \
   --mode overwrite
+
+
+### 
+Thesis Name :  Adaptive Re-Ranking with Knowledge Graph Derived Entity Embeddings
+
+
