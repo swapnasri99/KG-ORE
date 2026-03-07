@@ -98,6 +98,19 @@ scorer = pt.text.get_text(dataset, 'text') >> MonoT5ReRanker(verbose=args.verbos
 print("[6/6] Evaluation dataset (TREC-DL 20{})...".format(args.dl))
 eval_dataset = pt.get_dataset(f'irds:msmarco-passage/trec-dl-20{args.dl}/judged')
 
+
+# ============================================================
+# DEBUG: Build qrels_map for per-iteration relevance checks
+# ============================================================
+qrels_df = eval_dataset.get_qrels()
+# Use rel>=2 because you evaluate R(rel=2)@budget in Experiment
+qrels_map = (
+    qrels_df[qrels_df["label"] >= 2]
+    .groupby("qid")["docno"]
+    .apply(set)
+    .to_dict()
+)
+print(f"[DEBUG] qrels_map built for {len(qrels_map)} queries (rel>=2).")
 print("✓ All components loaded\n")
 
 # ============================================================
@@ -134,6 +147,7 @@ ore_kg = create_ore_kg(
     passage_el_db=args.passage_el_db,
     # ORE
     budget=args.budget,
+    debug_qrels_map=qrels_map,
     cross_enc_budget=args.ce,
     top_s=args.s,
     top_s2=args.s2,

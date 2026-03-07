@@ -193,3 +193,5 @@ freebase_1hop_clean.db-wal
 runs/adaptive/dl19/kg_ore/nolaff_bm25graph128/ORE_G0.2_E0.0_K0.8.c50.DL19.res.gz
 ORE_Appendix.pdf
 SIGIR_Slides.pdf
+runs/adaptive/dl19/kg_ore/E1.0/ORE_E1.0.c50.DL19.res.gz
+run_gar.py

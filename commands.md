@@ -12,8 +12,6 @@ python run_experiment_unified.py \
   --mode overwrite
 
 
-### 
-Thesis Name :  Adaptive Re-Ranking with Knowledge Graph Derived Entity Embeddings
 
 
 CUDA_VISIBLE_DEVICES="" python run_experiment_unified_mmead.py \
@@ -26,7 +24,7 @@ CUDA_VISIBLE_DEVICES="" python run_experiment_unified_mmead.py \
 CUDA_VISIBLE_DEVICES="" python run_experiment_unified_patched.py \
   --dl 19 --budget 50 \
   --ce 4 --s1 10 --s2 15 --s 10 \
-  --alpha 0.2 --beta 0.3 --gamma 0.5 \
+  --alpha 0.0 --beta 0.0 --gamma 1.0 \
   --kg_mode minmax \
   --passage_el_db passage_entities.db \
   --query_el query_dev_full_test_with_id.jsnol\
@@ -34,4 +32,20 @@ CUDA_VISIBLE_DEVICES="" python run_experiment_unified_patched.py \
   --verbose \
  
 
+python diagnose_kg_neighbors.py \
+  --dl 19 --budget 50\
+  --passage_el_db passage_entities.db \
+  --freebase_dir freebase/ \
+  --query_el query_dev_full_test_with_id.jsonl \
+  --alpha 0.0 --beta 0.0 --gamma 1.0 \
+  --output exp1_kg_only.csv
+
+
+CUDA_VISIBLE_DEVICES=""  python run_experiment_unified_v2.py \
+  --dl 19 --budget 50 --ce 4 --s 10 --s2 15 \
+  --alpha 0.0 --beta 0.0 --gamma 1.0 \
+  --passage_el_db passage_entities.db \
+  --freebase_dir freebase/ \
+  --query_el query_dev_full_test_with_id.jsonl \
+  --verbose
 

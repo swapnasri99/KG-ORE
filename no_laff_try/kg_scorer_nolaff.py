@@ -14,7 +14,7 @@ from typing import Dict, Set, List, Tuple, Optional
 from dataclasses import dataclass
 from collections import defaultdict
 
-from entity_store_disk import DiskEntityStore
+from Other_Files.entity_store_disk import DiskEntityStore
 
 
 @dataclass
