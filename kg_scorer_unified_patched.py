@@ -376,18 +376,11 @@ class KGScorerUnified:
 
         # Count-based modes (count, log, ratio, raw, minmax)
         connected = 0
-        checks = 0
-        max_checks = 500
 
         for m1 in valid1:
             for m2 in valid2:
-                if checks >= max_checks:
-                    break
                 if m1 != m2 and self.freebase_graph.are_connected(m1, m2):
                     connected += 1
-                checks += 1
-            if checks >= max_checks:
-                break
 
         if connected == 0:
             return 0.0
@@ -398,9 +391,9 @@ class KGScorerUnified:
         if self.kg_score_mode == 'log':
             return min(math.log2(connected + 1) / 5.0, 1.0)
 
-        if self.kg_score_mode == 'ratio':
-            total = min(len(valid1) * len(valid2), max_checks)
-            return connected / total if total > 0 else 0.0
+        #if self.kg_score_mode == 'ratio':
+         #   total = min(len(valid1) * len(valid2), max_checks)
+          #  return connected / total if total > 0 else 0.0
 
         if self.kg_score_mode in ('raw', 'minmax'):
             return float(connected)  # raw count; minmax normalizes in rescore_neighbors

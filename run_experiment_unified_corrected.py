@@ -115,7 +115,6 @@ ore_kg = create_ore_kg(
     query_el_path=args.query_el,
     passage_el_db=args.passage_el_db,
     budget=args.budget,
-    debug_qrels_map=qrels_map,
     cross_enc_budget=args.ce,
     top_s=args.s1,
     top_s2=args.s2,

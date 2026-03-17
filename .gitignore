@@ -195,3 +195,9 @@ ORE_Appendix.pdf
 SIGIR_Slides.pdf
 runs/adaptive/dl19/kg_ore/E1.0/ORE_E1.0.c50.DL19.res.gz
 run_gar.py
+runs/adaptive/dl19/kg_ore/K1.0_CERKG/ORE_K1.0_CERKG.c50.DL19.res.gz
+.gitignore
+runs/adaptive/dl19/kg_ore/K1.0_k16_no_kg_cer/ORE_K1.0.c50.DL19.res.gz
+.gitignore
+runs/adaptive/dl19/kg_ore/K1.0_k16_with_kg_cer/ORE_K1.0.c50.DL19.res.gz
+runs/adaptive/dl19/kg_ore/K1.0/ORE_K1.0.c50.DL19.res.gz
