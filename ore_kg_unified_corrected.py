@@ -410,9 +410,7 @@ class ArmKG:
         self.cross_enc_avg[doc] = score_utility
         self.estimates[doc] = self.estimated_scores
 
-        cer = self.estimated_scores + (lambda_ce * score_utility)
-        if use_kg_in_cer:
-            cer += lambda_kg * kg_term
+        cer = (lambda_aff * self.estimated_scores) + (lambda_ce * score_utility)
 
         self.cer_scores[doc] = cer
         return cer
