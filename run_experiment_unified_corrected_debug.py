@@ -39,6 +39,9 @@ parser.add_argument('--correction', type=str, default=None, choices=['bonferroni
 parser.add_argument('--baseline', type=int, default=None)
 parser.add_argument('--lk', type=int, default=128)
 parser.add_argument('--passage_el_db', type=str, default=None, help='Path to SQLite .db for full corpus EL (low RAM mode)')
+parser.add_argument('--neighbor_mode', type=str, default='kg_laff', choices=['kg_laff', 'union'],
+                    help="'kg_laff' = KG+LAFF rescored top-k, 'union' = union of LAFF top-k and KG top-k")
+parser.add_argument('--max_queries', type=int, default=None, help='Only run first N queries for debugging')
 
 args = parser.parse_args()
 if not args.passage_el and not args.passage_el_db:
@@ -80,12 +83,20 @@ scorer = pt.text.get_text(dataset, 'text') >> MonoT5ReRanker(verbose=args.verbos
 
 print(f'[6/6] Evaluation dataset (TREC-DL 20{args.dl})...')
 eval_dataset = pt.get_dataset(f'irds:msmarco-passage/trec-dl-20{args.dl}/judged')
+topics_df = eval_dataset.get_topics()
 qrels_df = eval_dataset.get_qrels()
+
+if args.max_queries is not None:
+    selected_qids = topics_df['qid'].tolist()[:args.max_queries]
+    topics_df = topics_df[topics_df['qid'].isin(selected_qids)].copy()
+    qrels_df = qrels_df[qrels_df['qid'].isin(selected_qids)].copy()
+    print(f'[DEBUG] Running only first {len(selected_qids)} queries: {selected_qids}')
+
 qrels_map = qrels_df[qrels_df['label'] >= 2].groupby('qid')['docno'].apply(set).to_dict()
 print(f'[DEBUG] qrels_map built for {len(qrels_map)} queries (rel>=2).')
 print('✓ All components loaded\n')
 
-from ore_kg_unified_corrected import create_ore_kg
+from ore_kg_unified_union_debug import create_ore_kg
 
 print('=' * 60)
 print('Experiment Configuration')
@@ -99,6 +110,7 @@ print(f'  KG Mode: {args.kg_mode}')
 print(f'  num_bm25_calls: {args.num_bm25_calls}')
 print(f'  kg_neighbor_k: {args.kg_neighbor_k}')
 print(f'  use_kg_in_cer: {args.use_kg_in_cer}')
+print(f'  neighbor_mode: {args.neighbor_mode}')
 
 ore_kg = create_ore_kg(
     dual_encoder=model,
@@ -124,6 +136,8 @@ ore_kg = create_ore_kg(
     kg_neighbor_k=args.kg_neighbor_k,
     use_kg_in_cer=args.use_kg_in_cer,
     kg_cer_weight_init=args.kg_cer_weight_init,
+    neighbor_mode=args.neighbor_mode,
+    qrels_map=qrels_map,  # Pass qrels_map for debugging purposes
 )
 
 print('\n' + '=' * 60)
@@ -142,6 +156,8 @@ if args.gamma > 0:
     parts.append(f'K{args.gamma}')
 if args.use_kg_in_cer:
     parts.append('CERKG')
+if args.neighbor_mode == 'union':
+    parts.append('UNION')
 exp_name = f"ORE_{'_'.join(parts)}.c{args.budget}.DL{args.dl}"
 
 kg_tag = '_'.join(parts) if parts else 'KG'
@@ -160,8 +176,8 @@ if args.baseline is not None:
 
 result = pt.Experiment(
     [bm25 >> ore_kg],
-    eval_dataset.get_topics(),
-    eval_dataset.get_qrels(),
+    topics_df,
+    qrels_df,
     [nDCG@10, nDCG@args.budget, R(rel=2)@args.budget],
     names=[exp_name],
     **experiment_kwargs,

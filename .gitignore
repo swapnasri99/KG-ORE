@@ -201,3 +201,5 @@ runs/adaptive/dl19/kg_ore/K1.0_k16_no_kg_cer/ORE_K1.0.c50.DL19.res.gz
 .gitignore
 runs/adaptive/dl19/kg_ore/K1.0_k16_with_kg_cer/ORE_K1.0.c50.DL19.res.gz
 runs/adaptive/dl19/kg_ore/K1.0/ORE_K1.0.c50.DL19.res.gz
+runs/adaptive/dl19/kg_ore/E0.3_K0.7_UNION/ORE_E0.3_K0.7_UNION.c50.DL19.res.gz
+runs/adaptive/dl20/kg_ore/E0.3_K0.7_UNION/ORE_E0.3_K0.7_UNION.c50.DL20.res.gz
