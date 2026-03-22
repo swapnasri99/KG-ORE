@@ -185,7 +185,7 @@ class OREAdaptiveKGUnified(pt.Transformer):
         lambda_bm25 = 0.65
         lambda_aff = 0.45
         lambda_ce = 0.65
-        lambda_kg = self.kg_cer_weight_init
+        lambda_kg = 0.0  # starts neutral; regression learns the right weight
 
         for _, (query, initial_results) in enumerate(groups):
             qid = initial_results['qid'].iloc[0]
@@ -233,8 +233,18 @@ class OREAdaptiveKGUnified(pt.Transformer):
                             bm25_scores.update(dict(zip(docnos_ret, scores_ret)))
 
                     neighbor_criteria_arms = [a for a in filtered_arms if a.docnos[-1] in combined_lookup]
-                    criteria_scores = [(a, combined_lookup.get(a.docnos[-1], 0.0)) for a in neighbor_criteria_arms]
-                    new_arms = [a for a, _ in heapq.nlargest(35, criteria_scores, key=lambda x: x[1])]
+
+                    # Top-35 by LAFF (safe, proven signal)
+                    laff_scores = [(a, laff_lookup.get(a.docnos[-1], 0.0)) for a in neighbor_criteria_arms]
+                    laff_top = [a for a, _ in heapq.nlargest(35, laff_scores, key=lambda x: x[1])]
+                    laff_top_set = set(id(a) for a in laff_top)
+
+                    # Top-15 by KG that LAFF missed (KG's unique contribution)
+                    kg_candidates = [(a, combined_lookup.get(a.docnos[-1], 0.0))
+                                     for a in neighbor_criteria_arms if id(a) not in laff_top_set]
+                    kg_extra = [a for a, _ in heapq.nlargest(15, kg_candidates, key=lambda x: x[1])]
+
+                    new_arms = laff_top + kg_extra
 
                     remaining_arms = [
                         (a, bm25_scores.get(a.docnos[-1], 0.0))
@@ -258,7 +268,7 @@ class OREAdaptiveKGUnified(pt.Transformer):
                                     self.graph, self.laff_graph,
                                     bm25_scores, cluster_heads,
                                     lambda_bm25, lambda_aff, lambda_ce,
-                                    laff_lookup, kg_only_lookup,
+                                    laff_lookup, combined_lookup,
                                     use_kg_in_cer=self.use_kg_in_cer,
                                     lambda_kg=lambda_kg,
                                 )
@@ -272,7 +282,7 @@ class OREAdaptiveKGUnified(pt.Transformer):
                                 self.graph, self.laff_graph,
                                 bm25_scores, cluster_heads,
                                 lambda_bm25, lambda_aff, lambda_ce,
-                                laff_lookup, kg_only_lookup,
+                                laff_lookup, combined_lookup,
                                 use_kg_in_cer=self.use_kg_in_cer,
                                 lambda_kg=lambda_kg,
                             )
@@ -318,10 +328,16 @@ class OREAdaptiveKGUnified(pt.Transformer):
                             features = np.concatenate(
                                 (bm25_features, affinity_features, neighbor_score_features, kg_features), axis=1
                             )
+                            # λ_kg can go to 0.0 so regression can shut it off when KG is noisy
+                            lb = self.param_bounds[0]
+                            ub = self.param_bounds[1]
+                            kg_bounds = ([lb, lb, lb, 0.0], [ub, ub, ub, ub])
                             params = scipy.optimize.lsq_linear(
-                                features, ranked_set_scores, lsq_solver='exact', bounds=self.param_bounds
+                                features, ranked_set_scores, lsq_solver='exact', bounds=kg_bounds
                             )
                             lambda_bm25, lambda_aff, lambda_ce, lambda_kg = params['x']
+                            if self.verbose:
+                                print(f'  [CER] qid={qid} iter={count} λ_bm25={lambda_bm25:.3f} λ_aff={lambda_aff:.3f} λ_ce={lambda_ce:.3f} λ_kg={lambda_kg:.3f}')
                         else:
                             features = np.concatenate(
                                 (bm25_features, affinity_features, neighbor_score_features), axis=1
@@ -493,6 +509,8 @@ class ArmKG:
         self.estimates[doc] = self.estimated_scores
 
         cer = (lambda_aff * self.estimated_scores) + (lambda_ce * score_utility)
+        if use_kg_in_cer:
+            cer += lambda_kg * kg_term
 
         self.cer_scores[doc] = cer
         return cer
