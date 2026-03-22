@@ -83,7 +83,6 @@ class OREAdaptiveKGUnified(pt.Transformer):
             raise ValueError(f"neighbor_mode must be 'kg_laff' or 'union', got '{neighbor_mode}'")
 
         self._doc_text_cache = {}
-        self._kg_debug_prints = 0
 
     def _get_doc_text(self, docno: str) -> str:
         if docno not in self._doc_text_cache:
@@ -104,21 +103,6 @@ class OREAdaptiveKGUnified(pt.Transformer):
         rescored = self.kg_scorer.rescore_neighbors(
             docno, neighbor_docnos, weights, qid=str(qid)
         )
-
-        if self.verbose and self._kg_debug_prints < 3:
-            self._kg_debug_prints += 1
-            print(
-                '\n[KG DEBUG] qid=', qid, 'docno=', docno,
-                'top neighbors (laff_norm, overlap, kg_raw, kg_norm, combined)'
-            )
-            for n_docno, score, comp in rescored[:10]:
-                print(
-                    f'  n={n_docno}  laff={comp.laff_norm:.3f}  '
-                    f'ov={comp.entity_overlap:.3f}  '
-                    f'kg_raw={comp.kg_raw:.6f}  kg_norm={comp.kg_connectivity:.6f}  '
-                    f'comb={comp.combined:.3f}'
-                )
-
         return rescored
 
     def _get_union_neighbors(
@@ -218,6 +202,10 @@ class OREAdaptiveKGUnified(pt.Transformer):
                 docid: 'initial_bm25'
                 for docid in initial_results['docno'].tolist()[:self.budget]
             }
+            candidate_pool_docs = {
+                docid: 'initial_bm25'
+                for docid in initial_results['docno'].tolist()[:self.budget]
+            }
 
             count = 0
             prev_heads = []
@@ -227,7 +215,9 @@ class OREAdaptiveKGUnified(pt.Transformer):
                     arm = sorted(arms, key=lambda x: x.estimate_utility(), reverse=True)[:self.batch_size]
                 else:
                     cluster_heads = [doc for doc, _ in Counter(results).most_common(self.top_s)]
-                    combined_lookup, laff_lookup, kg_only_lookup = self._compute_kg_enhanced_cluster_lookup(qid, cluster_heads)
+                    combined_lookup, laff_lookup, kg_only_lookup = self._compute_kg_enhanced_cluster_lookup(
+                        qid, cluster_heads
+                    )
 
                     filtered_arms = [a for a in arms if a.docnos[-1] not in results]
 
@@ -367,8 +357,13 @@ class OREAdaptiveKGUnified(pt.Transformer):
                                 arms.append(neighbor_arm)
                                 all_docnos.append(neighbor)
 
+                                src = source_map.get(neighbor, 'unknown')
+
                                 if neighbor not in doc_source:
-                                    doc_source[neighbor] = source_map.get(neighbor, 'unknown')
+                                    doc_source[neighbor] = src
+
+                                if neighbor not in candidate_pool_docs:
+                                    candidate_pool_docs[neighbor] = src
 
                 prev_heads = cluster_heads if count > 0 else []
                 count += 1
@@ -379,33 +374,36 @@ class OREAdaptiveKGUnified(pt.Transformer):
                 top50 = final_ranked_docs[:50]
                 relevant_docs = self.qrels_map.get(str(qid), set())
 
-                def get_source_stats(source_name):
+                def source_pool_stats(source_name):
+                    docs = [d for d, s in candidate_pool_docs.items() if s == source_name]
+                    rel_docs = [d for d in docs if d in relevant_docs]
+                    return len(docs), len(rel_docs)
+
+                def source_top50_stats(source_name):
                     docs = [d for d in top50 if doc_source.get(d, 'unknown') == source_name]
                     rel_docs = [d for d in docs if d in relevant_docs]
                     return len(docs), len(rel_docs)
 
-                bm25_count, bm25_rel = get_source_stats('initial_bm25')
-
-                print('\n' + '=' * 70)
-                print(f'[KG TOP50 DEBUG] qid={qid}  mode={self.neighbor_mode}')
-                print(f'Final top-50 docs: {len(top50)}')
+                print('\n' + '=' * 74)
+                print(f'[UNION POOL/TOP50] qid={qid}  mode={self.neighbor_mode}')
+                print(f'Candidate pool size: {len(candidate_pool_docs)}')
+                print(f'Final top-50 size  : {len(top50)}')
+                print('-' * 74)
 
                 if self.neighbor_mode == 'union':
-                    kg_count, kg_rel = get_source_stats('kg_only')
-                    laff_count, laff_rel = get_source_stats('laff_only')
-                    both_count, both_rel = get_source_stats('both')
-
-                    print(f'initial_bm25 : count={bm25_count:2d}  relevant={bm25_rel:2d}')
-                    print(f'kg_only      : count={kg_count:2d}  relevant={kg_rel:2d}')
-                    print(f'laff_only    : count={laff_count:2d}  relevant={laff_rel:2d}')
-                    print(f'both         : count={both_count:2d}  relevant={both_rel:2d}')
+                    labels = ['initial_bm25', 'kg_only', 'laff_only', 'both']
                 else:
-                    kglaff_count, kglaff_rel = get_source_stats('kg_laff')
+                    labels = ['initial_bm25', 'kg_laff']
 
-                    print(f'initial_bm25 : count={bm25_count:2d}  relevant={bm25_rel:2d}')
-                    print(f'kg_laff      : count={kglaff_count:2d}  relevant={kglaff_rel:2d}')
+                print(f'{"source":14s} {"pool":>6s} {"pool_rel":>9s} {"top50":>7s} {"top50_rel":>10s}')
+                print('-' * 74)
 
-                print('=' * 70)
+                for label in labels:
+                    pool_n, pool_rel = source_pool_stats(label)
+                    top_n, top_rel = source_top50_stats(label)
+                    print(f'{label:14s} {pool_n:6d} {pool_rel:9d} {top_n:7d} {top_rel:10d}')
+
+                print('=' * 74)
 
             for rank, (docno, final_score) in enumerate(Counter(results).most_common()):
                 result_builder.extend({
@@ -527,8 +525,8 @@ def create_ore_kg(
         full_passage_el_path=full_passage_el_path,
         query_el_path=query_el_path,
         passage_el_db=passage_el_db,
-        debug=bool(kwargs.get('verbose', False)),
-        debug_print_limit=3,
+        debug=False,
+        debug_print_limit=0,
     )
 
     return OREAdaptiveKGUnified(
