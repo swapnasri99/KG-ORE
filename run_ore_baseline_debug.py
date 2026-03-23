@@ -19,6 +19,7 @@ parser.add_argument('--s1', type=int, default=25)
 parser.add_argument('--s2', type=int, default=15)
 parser.add_argument('--batch', type=int, default=16)
 parser.add_argument('--max_queries', type=int, default=None)
+parser.add_argument('--skip_queries', type=int, default=0)
 parser.add_argument('--verbose', action='store_true')
 parser.add_argument('--mode', type=str, default='overwrite', choices=['overwrite', 'reuse'])
 args = parser.parse_args()
@@ -47,11 +48,15 @@ eval_dataset = pt.get_dataset(f'irds:msmarco-passage/trec-dl-20{args.dl}/judged'
 topics_df = eval_dataset.get_topics()
 qrels_df = eval_dataset.get_qrels()
 
-if args.max_queries is not None:
-    selected_qids = topics_df['qid'].tolist()[:args.max_queries]
+if args.skip_queries > 0 or args.max_queries is not None:
+    all_qids = topics_df['qid'].tolist()
+    all_qids = all_qids[args.skip_queries:]
+    if args.max_queries is not None:
+        all_qids = all_qids[:args.max_queries]
+    selected_qids = all_qids
     topics_df = topics_df[topics_df['qid'].isin(selected_qids)].copy()
     qrels_df = qrels_df[qrels_df['qid'].isin(selected_qids)].copy()
-    print(f'[DEBUG] Running only first {len(selected_qids)} queries: {selected_qids}')
+    print(f'[DEBUG] Running {len(selected_qids)} queries (skip={args.skip_queries}): {selected_qids}')
 
 qrels_map = qrels_df[qrels_df['label'] >= 2].groupby('qid')['docno'].apply(set).to_dict()
 

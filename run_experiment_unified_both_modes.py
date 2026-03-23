@@ -42,6 +42,7 @@ parser.add_argument('--passage_el_db', type=str, default=None, help='Path to SQL
 parser.add_argument('--neighbor_mode', type=str, default='kg_laff', choices=['kg_laff', 'union'],
                     help="'kg_laff' = KG+LAFF rescored top-k, 'union' = union of LAFF top-k and KG top-k")
 parser.add_argument('--max_queries', type=int, default=None, help='Only run first N queries for debugging')
+parser.add_argument('--skip_queries', type=int, default=0, help='Skip first N queries')
 
 args = parser.parse_args()
 if not args.passage_el and not args.passage_el_db:
@@ -86,11 +87,15 @@ eval_dataset = pt.get_dataset(f'irds:msmarco-passage/trec-dl-20{args.dl}/judged'
 topics_df = eval_dataset.get_topics()
 qrels_df = eval_dataset.get_qrels()
 
-if args.max_queries is not None:
-    selected_qids = topics_df['qid'].tolist()[:args.max_queries]
+if args.skip_queries > 0 or args.max_queries is not None:
+    all_qids = topics_df['qid'].tolist()
+    all_qids = all_qids[args.skip_queries:]  # skip first N
+    if args.max_queries is not None:
+        all_qids = all_qids[:args.max_queries]  # then take next M
+    selected_qids = all_qids
     topics_df = topics_df[topics_df['qid'].isin(selected_qids)].copy()
     qrels_df = qrels_df[qrels_df['qid'].isin(selected_qids)].copy()
-    print(f'[DEBUG] Running only first {len(selected_qids)} queries: {selected_qids}')
+    print(f'[DEBUG] Running {len(selected_qids)} queries (skip={args.skip_queries}): {selected_qids}')
 
 qrels_map = qrels_df[qrels_df['label'] >= 2].groupby('qid')['docno'].apply(set).to_dict()
 print(f'[DEBUG] qrels_map built for {len(qrels_map)} queries (rel>=2).')
