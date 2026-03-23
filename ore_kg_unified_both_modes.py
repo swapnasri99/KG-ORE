@@ -185,7 +185,7 @@ class OREAdaptiveKGUnified(pt.Transformer):
         lambda_bm25 = 0.65
         lambda_aff = 0.45
         lambda_ce = 0.65
-        lambda_kg = 0.0  # starts neutral; regression learns the right weight
+        lambda_kg = 0.0
 
         for _, (query, initial_results) in enumerate(groups):
             qid = initial_results['qid'].iloc[0]
@@ -234,17 +234,21 @@ class OREAdaptiveKGUnified(pt.Transformer):
 
                     neighbor_criteria_arms = [a for a in filtered_arms if a.docnos[-1] in combined_lookup]
 
-                    # Top-35 by LAFF (safe, proven signal)
+                    # Top-35 by LAFF (safe, same as original ORE)
                     laff_scores = [(a, laff_lookup.get(a.docnos[-1], 0.0)) for a in neighbor_criteria_arms]
                     laff_top = [a for a, _ in heapq.nlargest(35, laff_scores, key=lambda x: x[1])]
                     laff_top_set = set(id(a) for a in laff_top)
 
-                    # Top-15 by KG that LAFF missed (KG's unique contribution)
-                    kg_candidates = [(a, combined_lookup.get(a.docnos[-1], 0.0))
-                                     for a in neighbor_criteria_arms if id(a) not in laff_top_set]
-                    kg_extra = [a for a, _ in heapq.nlargest(15, kg_candidates, key=lambda x: x[1])]
-
-                    new_arms = laff_top + kg_extra
+                    # Only add KG slots after cross-encoder budget is mostly spent
+                    # This ensures LAFF docs get cross-encoder scored first (like baseline ORE)
+                    # KG docs enter later when remaining budget is for CER-only ranking
+                    if len(results) >= min(self.batch_size * (self.cross_enc_budget - 1), self.budget):
+                        kg_candidates = [(a, combined_lookup.get(a.docnos[-1], 0.0))
+                                         for a in neighbor_criteria_arms if id(a) not in laff_top_set]
+                        kg_extra = [a for a, _ in heapq.nlargest(15, kg_candidates, key=lambda x: x[1])]
+                        new_arms = laff_top + kg_extra
+                    else:
+                        new_arms = laff_top
 
                     remaining_arms = [
                         (a, bm25_scores.get(a.docnos[-1], 0.0))
@@ -328,10 +332,9 @@ class OREAdaptiveKGUnified(pt.Transformer):
                             features = np.concatenate(
                                 (bm25_features, affinity_features, neighbor_score_features, kg_features), axis=1
                             )
-                            # λ_kg can go to 0.0 so regression can shut it off when KG is noisy
                             lb = self.param_bounds[0]
                             ub = self.param_bounds[1]
-                            kg_bounds = ([lb, lb, lb, 0.0], [ub, ub, ub, ub])
+                            kg_bounds = ([lb, lb, lb, 0.0], [ub, ub, ub, 0.5])
                             params = scipy.optimize.lsq_linear(
                                 features, ranked_set_scores, lsq_solver='exact', bounds=kg_bounds
                             )
