@@ -1,23 +1,22 @@
 from collections import Counter, defaultdict
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 from statistics import mean
-import torch
-import numpy as np
 import heapq
-import scipy
 import random
 
-random.seed(42)
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+import numpy as np
 import pandas as pd
 import pyterrier as pt
 import pyterrier_alpha as pta
-from pyterrier_adaptive import CorpusGraph
+import scipy
+import torch
 import ir_datasets
+from pyterrier_adaptive import CorpusGraph
 
 from kg_scorer_unified_corrected import KGScorerUnified, create_scorer
+
+random.seed(42)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Load MS MARCO docstore (for BM25 scoring text)
 dataset_store = ir_datasets.load('msmarco-passage')
@@ -29,7 +28,9 @@ existing_index = pt.terrier.Retriever.from_dataset(
 ).indexref
 existing_index = pt.IndexFactory.of(existing_index)
 ret_scorer = pt.text.scorer(
-    takes='docs', body_attr='text', wmodel='BM25',
+    takes='docs',
+    body_attr='text',
+    wmodel='BM25',
     background_index=existing_index,
     controls={'termpipelines': 'Stopwords,PorterStemmer'}
 )
@@ -56,8 +57,10 @@ class OREAdaptiveKGUnified(pt.Transformer):
         kg_neighbor_k: int = 16,
         use_kg_in_cer: bool = False,
         kg_cer_weight_init: float = 0.20,
-        neighbor_mode: str = 'kg_laff',  # 'kg_laff' or 'union'
+        neighbor_mode: str = 'kg_laff',
         qrels_map=None,
+        kg_bonus_k: int = 15,
+        enable_post_ce_bonus: bool = True,
     ):
         self.scorer = scorer
         self.graph = graph
@@ -78,6 +81,8 @@ class OREAdaptiveKGUnified(pt.Transformer):
         self.kg_cer_weight_init = kg_cer_weight_init
         self.neighbor_mode = neighbor_mode
         self.qrels_map = qrels_map or {}
+        self.kg_bonus_k = kg_bonus_k
+        self.enable_post_ce_bonus = enable_post_ce_bonus
 
         if self.neighbor_mode not in ('kg_laff', 'union'):
             raise ValueError(f"neighbor_mode must be 'kg_laff' or 'union', got '{neighbor_mode}'")
@@ -111,7 +116,7 @@ class OREAdaptiveKGUnified(pt.Transformer):
         docno: str,
         neighbors: np.ndarray,
         weights: np.ndarray,
-    ) -> Tuple[List[Tuple[str, float, object]], Dict[str, str]]:
+    ) -> Tuple[List[Tuple[str, float, object]], Dict[str, Dict[str, bool]]]:
         neighbor_docnos = [str(n) for n in neighbors]
 
         laff_top = set(neighbor_docnos[:self.kg_neighbor_k])
@@ -124,16 +129,14 @@ class OREAdaptiveKGUnified(pt.Transformer):
         union_set = laff_top | kg_top
         union_rescored = [(n, s, c) for n, s, c in rescored if n in union_set]
 
-        source_map = {}
+        membership = {}
         for n in union_set:
-            if n in kg_top and n not in laff_top:
-                source_map[n] = 'kg_only'
-            elif n in laff_top and n not in kg_top:
-                source_map[n] = 'laff_only'
-            else:
-                source_map[n] = 'both'
+            membership[n] = {
+                'in_laff': n in laff_top,
+                'in_kg': n in kg_top,
+            }
 
-        return union_rescored, source_map
+        return union_rescored, membership
 
     def _get_selected_neighbors(
         self,
@@ -141,14 +144,17 @@ class OREAdaptiveKGUnified(pt.Transformer):
         docno: str,
         neighbors: np.ndarray,
         weights: np.ndarray,
-    ) -> Tuple[List[Tuple[str, float, object]], Dict[str, str]]:
+    ):
         if self.neighbor_mode == 'union':
             return self._get_union_neighbors(qid, docno, neighbors, weights)
-        else:
-            rescored = self._get_kg_enhanced_neighbors(qid, docno, neighbors, weights)
-            selected = rescored[:self.kg_neighbor_k]
-            source_map = {n: 'kg_laff' for n, _, _ in selected}
-            return selected, source_map
+
+        rescored = self._get_kg_enhanced_neighbors(qid, docno, neighbors, weights)
+        selected = rescored[:self.kg_neighbor_k]
+        membership = {
+            n: {'in_laff': True, 'in_kg': True}
+            for n, _, _ in selected
+        }
+        return selected, membership
 
     def _compute_kg_enhanced_cluster_lookup(self, qid: str, cluster_heads):
         combined_lookup = defaultdict(list)
@@ -170,6 +176,26 @@ class OREAdaptiveKGUnified(pt.Transformer):
             {k: mean(v) for k, v in kg_only_lookup.items()},
         )
 
+    def _build_locked_baseline_candidates(self, filtered_arms, laff_lookup, bm25_scores):
+        neighbor_criteria_arms = [a for a in filtered_arms if a.docnos[-1] in laff_lookup]
+
+        laff_scores = [(a, laff_lookup.get(a.docnos[-1], 0.0)) for a in neighbor_criteria_arms]
+        laff_top = [a for a, _ in heapq.nlargest(35, laff_scores, key=lambda x: x[1])]
+        laff_docnos = set(a.docnos[-1] for a in laff_top)
+
+        remaining_arms = [
+            (a, bm25_scores.get(a.docnos[-1], 0.0))
+            for a in neighbor_criteria_arms
+            if a.docnos[-1] in bm25_scores and a.docnos[-1] not in laff_docnos
+        ]
+        bm25_arms = [a for a, _ in heapq.nlargest(25, remaining_arms, key=lambda x: x[1])]
+
+        baseline_candidates = list(dict.fromkeys(laff_top + bm25_arms))
+        if len(baseline_candidates) == 0:
+            baseline_candidates = filtered_arms
+
+        return baseline_candidates, laff_top
+
     def estimate_bm25_score_batch(self, qids, queries, docids):
         batch = []
         for qid, query, docid in zip(qids, queries, docids):
@@ -185,7 +211,7 @@ class OREAdaptiveKGUnified(pt.Transformer):
         lambda_bm25 = 0.65
         lambda_aff = 0.45
         lambda_ce = 0.65
-        lambda_kg = 0.0
+        lambda_kg = self.kg_cer_weight_init if self.use_kg_in_cer else 0.0
 
         for _, (query, initial_results) in enumerate(groups):
             qid = initial_results['qid'].iloc[0]
@@ -198,24 +224,37 @@ class OREAdaptiveKGUnified(pt.Transformer):
 
             results = {}
             bm25_scores = dict(zip(initial_results['docno'].values, initial_results['score'].values))
+
             doc_source = {
-                docid: 'initial_bm25'
+                docid: {
+                    'initial_bm25': True,
+                    'in_laff': False,
+                    'in_kg': False,
+                    'kg_ce_post': False,
+                }
                 for docid in initial_results['docno'].tolist()[:self.budget]
             }
             candidate_pool_docs = {
-                docid: 'initial_bm25'
+                docid: {
+                    'initial_bm25': True,
+                    'in_laff': False,
+                    'in_kg': False,
+                    'kg_ce_post': False,
+                }
                 for docid in initial_results['docno'].tolist()[:self.budget]
             }
 
-            # KG candidates discovered during expansion but not yet scored
-            kg_candidates_seen = {}  # docno -> parent_score
-
+            kg_candidates_seen = {}
             count = 0
             prev_heads = []
 
             while len(arms) > 0 and len(results) < self.budget:
                 if count == 0:
                     arm = sorted(arms, key=lambda x: x.estimate_utility(), reverse=True)[:self.batch_size]
+                    cluster_heads = []
+                    combined_lookup = {}
+                    laff_lookup = {}
+                    kg_only_lookup = {}
                 else:
                     cluster_heads = [doc for doc, _ in Counter(results).most_common(self.top_s)]
                     combined_lookup, laff_lookup, kg_only_lookup = self._compute_kg_enhanced_cluster_lookup(
@@ -235,47 +274,32 @@ class OREAdaptiveKGUnified(pt.Transformer):
                             )
                             bm25_scores.update(dict(zip(docnos_ret, scores_ret)))
 
-                    neighbor_criteria_arms = [a for a in filtered_arms if a.docnos[-1] in combined_lookup]
+                    baseline_candidates, _ = self._build_locked_baseline_candidates(
+                        filtered_arms, laff_lookup, bm25_scores
+                    )
 
-                    # Top-35 by LAFF (safe, same as original ORE)
-                    laff_scores = [(a, laff_lookup.get(a.docnos[-1], 0.0)) for a in neighbor_criteria_arms]
-                    laff_top = [a for a, _ in heapq.nlargest(35, laff_scores, key=lambda x: x[1])]
-                    laff_top_set = set(id(a) for a in laff_top)
-
-                    # Only add KG slots after cross-encoder budget is mostly spent
-                    # This ensures LAFF docs get cross-encoder scored first (like baseline ORE)
-                    # KG docs enter later when remaining budget is for CER-only ranking
-                    if len(results) >= min(self.batch_size * (self.cross_enc_budget - 1), self.budget):
-                        kg_candidates = [(a, combined_lookup.get(a.docnos[-1], 0.0))
-                                         for a in neighbor_criteria_arms if id(a) not in laff_top_set]
-                        kg_extra = [a for a, _ in heapq.nlargest(15, kg_candidates, key=lambda x: x[1])]
-                        new_arms = laff_top + kg_extra
-                    else:
-                        new_arms = laff_top
-
-                    remaining_arms = [
-                        (a, bm25_scores.get(a.docnos[-1], 0.0))
+                    baseline_docnos = set(a.docnos[-1] for a in baseline_candidates)
+                    kg_bonus_candidates = [
+                        (a, combined_lookup.get(a.docnos[-1], 0.0))
                         for a in filtered_arms
-                        if a not in new_arms and a.docnos[-1] in bm25_scores
+                        if a.docnos[-1] in combined_lookup and a.docnos[-1] not in baseline_docnos
                     ]
-                    bm25_arms = [a for a, _ in heapq.nlargest(25, remaining_arms, key=lambda x: x[1])]
-                    new_arms.extend(bm25_arms)
-
-                    if len(new_arms) == 0:
-                        new_arms = filtered_arms
-
-                    new_arms = list(dict.fromkeys(new_arms))
+                    kg_bonus_arms = [
+                        a for a, _ in heapq.nlargest(self.kg_bonus_k, kg_bonus_candidates, key=lambda x: x[1])
+                    ]
 
                     if prev_heads == cluster_heads:
-                        arm = sorted(
-                            new_arms,
+                        baseline_batch = sorted(
+                            baseline_candidates,
                             key=lambda x: (
-                                x.cer_scores[x.docnos[-1]] if x.docnos[-1] in x.cer_scores else x.estimate_cer_score(
+                                x.cer_scores[x.docnos[-1]]
+                                if x.docnos[-1] in x.cer_scores
+                                else x.estimate_cer_score(
                                     qid, query, x.docnos, results,
                                     self.graph, self.laff_graph,
                                     bm25_scores, cluster_heads,
                                     lambda_bm25, lambda_aff, lambda_ce,
-                                    laff_lookup, combined_lookup,
+                                    laff_lookup, kg_only_lookup,
                                     use_kg_in_cer=self.use_kg_in_cer,
                                     lambda_kg=lambda_kg,
                                 )
@@ -283,23 +307,32 @@ class OREAdaptiveKGUnified(pt.Transformer):
                             reverse=True,
                         )[:self.batch_size]
                     else:
-                        cer_scores_list = [
+                        baseline_cer_scores = [
                             x.estimate_cer_score(
                                 qid, query, x.docnos, results,
                                 self.graph, self.laff_graph,
                                 bm25_scores, cluster_heads,
                                 lambda_bm25, lambda_aff, lambda_ce,
-                                laff_lookup, combined_lookup,
+                                laff_lookup, kg_only_lookup,
                                 use_kg_in_cer=self.use_kg_in_cer,
                                 lambda_kg=lambda_kg,
                             )
-                            for x in new_arms
+                            for x in baseline_candidates
                         ]
-                        arm = [
+                        baseline_batch = [
                             x for x, _ in sorted(
-                                zip(new_arms, cer_scores_list), key=lambda x: x[1], reverse=True
+                                zip(baseline_candidates, baseline_cer_scores),
+                                key=lambda x: x[1],
+                                reverse=True,
                             )[:self.batch_size]
                         ]
+
+                    arm = baseline_batch
+
+                    for a in kg_bonus_arms:
+                        d = a.docnos[-1]
+                        if d not in kg_candidates_seen:
+                            kg_candidates_seen[d] = combined_lookup.get(d, 0.0)
 
                 docnos_final = [x.docnos[-1] for x in arm]
                 all_docnos = [x.docnos[-1] for x in arms]
@@ -313,43 +346,58 @@ class OREAdaptiveKGUnified(pt.Transformer):
 
                     doc_object = [{'docno': docno} for docno in docnos_final]
                     doc_vecs = np.concatenate([
-                        dv.reshape(1, -1)
-                        for dv in self.corpus_index.vec_loader()(pd.DataFrame(doc_object))['doc_vec'].values
+                        doc_vector.reshape(1, -1)
+                        for doc_vector in self.corpus_index.vec_loader()(pd.DataFrame(doc_object))['doc_vec'].values
                     ])
 
                     dual_score = (query_vecs.dot(doc_vecs.T))[0]
+                    batch = pd.DataFrame(docnos_final, columns=['docno'])
+                    batch['qid'] = qid
+                    batch['query'] = query
+                    reranked_scores = list(self.scorer(batch)['score'].values)
 
-                    batch_df = pd.DataFrame(docnos_final, columns=['docno'])
-                    batch_df['qid'] = qid
-                    batch_df['query'] = query
-                    reranked_scores = list(self.scorer(batch_df)['score'].values)
-                    ranked_set_scores = [x + s for x, s in zip(reranked_scores, dual_score)]
+                    ranked_set_scores = [x + score for x, score in zip(reranked_scores, dual_score)]
 
                     if count > 0:
-                        bm25_features = np.array([x.bm25_scores.get(x.docnos[-1], 0.0) for x in arm]).reshape(-1, 1)
-                        affinity_features = np.array([x.estimates[x.docnos[-1]] for x in arm]).reshape(-1, 1)
-                        neighbor_score_features = np.array([x.cross_enc_avg[x.docnos[-1]] for x in arm]).reshape(-1, 1)
+                        bm25_features = np.array([
+                            x.bm25_scores.get(x.docnos[-1], 0.0) for x in arm
+                        ]).reshape(-1, 1)
+                        affinity_features = np.array([
+                            x.estimates[x.docnos[-1]] for x in arm
+                        ]).reshape(-1, 1)
+                        neighbor_score_features = np.array([
+                            x.cross_enc_avg[x.docnos[-1]] for x in arm
+                        ]).reshape(-1, 1)
 
                         if self.use_kg_in_cer:
-                            kg_features = np.array([x.kg_features.get(x.docnos[-1], 0.0) for x in arm]).reshape(-1, 1)
+                            kg_features = np.array([
+                                x.kg_features.get(x.docnos[-1], 0.0) for x in arm
+                            ]).reshape(-1, 1)
+
                             features = np.concatenate(
-                                (bm25_features, affinity_features, neighbor_score_features, kg_features), axis=1
+                                (bm25_features, affinity_features, neighbor_score_features, kg_features),
+                                axis=1,
                             )
+
                             lb = self.param_bounds[0]
                             ub = self.param_bounds[1]
-                            kg_bounds = ([lb, lb, lb, 0.0], [ub, ub, ub, 0.5])
                             params = scipy.optimize.lsq_linear(
-                                features, ranked_set_scores, lsq_solver='exact', bounds=kg_bounds
+                                features,
+                                ranked_set_scores,
+                                lsq_solver='exact',
+                                bounds=([lb, lb, lb, 0.0], [ub, ub, ub, 0.5]),
                             )
                             lambda_bm25, lambda_aff, lambda_ce, lambda_kg = params['x']
-                            if self.verbose:
-                                print(f'  [CER] qid={qid} iter={count} λ_bm25={lambda_bm25:.3f} λ_aff={lambda_aff:.3f} λ_ce={lambda_ce:.3f} λ_kg={lambda_kg:.3f}')
                         else:
                             features = np.concatenate(
-                                (bm25_features, affinity_features, neighbor_score_features), axis=1
+                                (bm25_features, affinity_features, neighbor_score_features),
+                                axis=1,
                             )
                             params = scipy.optimize.lsq_linear(
-                                features, ranked_set_scores, lsq_solver='exact', bounds=self.param_bounds
+                                features,
+                                ranked_set_scores,
+                                lsq_solver='exact',
+                                bounds=self.param_bounds,
                             )
                             lambda_bm25, lambda_aff, lambda_ce = params['x']
                 else:
@@ -368,7 +416,7 @@ class OREAdaptiveKGUnified(pt.Transformer):
                     for docno in neighbor_lookup:
                         parent_score = parent_score_lookup.get(docno, results.get(docno, 0.0))
                         neighbors, weights = self.laff_graph.neighbours(docno, weights=True)
-                        selected_neighbors, source_map = self._get_selected_neighbors(qid, docno, neighbors, weights)
+                        selected_neighbors, membership = self._get_selected_neighbors(qid, docno, neighbors, weights)
 
                         for neighbor, kg_score, comp in selected_neighbors:
                             if neighbor not in all_docnos:
@@ -379,97 +427,161 @@ class OREAdaptiveKGUnified(pt.Transformer):
                                 arms.append(neighbor_arm)
                                 all_docnos.append(neighbor)
 
-                                src = source_map.get(neighbor, 'unknown')
-
-                                if neighbor not in doc_source:
-                                    doc_source[neighbor] = src
+                                flags = membership.get(neighbor, {'in_laff': False, 'in_kg': False})
 
                                 if neighbor not in candidate_pool_docs:
-                                    candidate_pool_docs[neighbor] = src
+                                    candidate_pool_docs[neighbor] = {
+                                        'initial_bm25': False,
+                                        'in_laff': flags['in_laff'],
+                                        'in_kg': flags['in_kg'],
+                                        'kg_ce_post': False,
+                                    }
+                                else:
+                                    candidate_pool_docs[neighbor]['in_laff'] = candidate_pool_docs[neighbor]['in_laff'] or flags['in_laff']
+                                    candidate_pool_docs[neighbor]['in_kg'] = candidate_pool_docs[neighbor]['in_kg'] or flags['in_kg']
 
-                                # Track KG-only docs for post-loop CE scoring
-                                if src == 'kg_only' and neighbor not in kg_candidates_seen:
-                                    kg_candidates_seen[neighbor] = parent_score
+                                if neighbor not in doc_source:
+                                    doc_source[neighbor] = {
+                                        'initial_bm25': False,
+                                        'in_laff': flags['in_laff'],
+                                        'in_kg': flags['in_kg'],
+                                        'kg_ce_post': False,
+                                    }
+                                else:
+                                    doc_source[neighbor]['in_laff'] = doc_source[neighbor]['in_laff'] or flags['in_laff']
+                                    doc_source[neighbor]['in_kg'] = doc_source[neighbor]['in_kg'] or flags['in_kg']
+
+                                if flags['in_kg'] and not flags['in_laff']:
+                                    if neighbor not in kg_candidates_seen:
+                                        kg_candidates_seen[neighbor] = parent_score
 
                 prev_heads = cluster_heads if count > 0 else []
                 count += 1
                 arms = [a for a in arms if not a.is_exhausted()]
 
-            # === POST-LOOP: CE-score top KG candidates and swap into results ===
-            kg_unseen = {d: s for d, s in kg_candidates_seen.items() if d not in results}
-            if kg_unseen:
-                # Pick top-16 KG docs by parent score (most promising)
-                kg_top = sorted(kg_unseen.items(), key=lambda x: x[1], reverse=True)[:self.batch_size]
-                kg_docnos = [d for d, _ in kg_top]
+            if self.enable_post_ce_bonus:
+                kg_unseen = {d: s for d, s in kg_candidates_seen.items() if d not in results}
+                if kg_unseen:
+                    kg_top = sorted(kg_unseen.items(), key=lambda x: x[1], reverse=True)[:self.kg_bonus_k]
+                    kg_docnos = [d for d, _ in kg_top]
 
-                # CE-score them with MonoT5 + dual encoder
-                with torch.no_grad():
-                    query_vecs = self.dual_encoder.encode_queries([query])[0].reshape(1, -1)
+                    with torch.no_grad():
+                        query_vecs = self.dual_encoder.encode_queries([query])[0].reshape(1, -1)
 
-                doc_object = [{'docno': d} for d in kg_docnos]
-                doc_vecs = np.concatenate([
-                    dv.reshape(1, -1)
-                    for dv in self.corpus_index.vec_loader()(pd.DataFrame(doc_object))['doc_vec'].values
-                ])
-                dual_score = (query_vecs.dot(doc_vecs.T))[0]
+                    doc_object = [{'docno': d} for d in kg_docnos]
+                    doc_vecs = np.concatenate([
+                        dv.reshape(1, -1)
+                        for dv in self.corpus_index.vec_loader()(pd.DataFrame(doc_object))['doc_vec'].values
+                    ])
+                    dual_score = (query_vecs.dot(doc_vecs.T))[0]
 
-                batch_df = pd.DataFrame(kg_docnos, columns=['docno'])
-                batch_df['qid'] = qid
-                batch_df['query'] = query
-                kg_ce_scores = list(self.scorer(batch_df)['score'].values)
-                kg_final_scores = [ce + ds for ce, ds in zip(kg_ce_scores, dual_score)]
+                    batch_df = pd.DataFrame(kg_docnos, columns=['docno'])
+                    batch_df['qid'] = qid
+                    batch_df['query'] = query
+                    kg_ce_scores = list(self.scorer(batch_df)['score'].values)
+                    kg_final_scores = [ce + ds for ce, ds in zip(kg_ce_scores, dual_score)]
 
-                # Swap in KG docs that beat the weakest results
-                sorted_results = sorted(results.items(), key=lambda x: x[1])
-                kg_merged = 0
-                for kg_doc, kg_score in sorted(zip(kg_docnos, kg_final_scores), key=lambda x: x[1], reverse=True):
-                    weakest_doc, weakest_score = sorted_results[0]
-                    if kg_score > weakest_score:
-                        del results[weakest_doc]
-                        results[kg_doc] = kg_score
-                        doc_source[kg_doc] = 'kg_ce_post'
-                        sorted_results.pop(0)
-                        kg_merged += 1
-                    else:
-                        break
-                if self.verbose:
-                    print(f'  [KG-POST-CE] qid={qid}: CE-scored {len(kg_docnos)} KG docs, merged {kg_merged} into results (pool={len(kg_unseen)})')
+                    sorted_results = sorted(results.items(), key=lambda x: x[1])
+                    kg_merged = 0
+
+                    for kg_doc, kg_score in sorted(zip(kg_docnos, kg_final_scores), key=lambda x: x[1], reverse=True):
+                        weakest_doc, weakest_score = sorted_results[0]
+                        if kg_score > weakest_score:
+                            del results[weakest_doc]
+                            results[kg_doc] = kg_score
+
+                            if kg_doc in doc_source:
+                                doc_source[kg_doc]['kg_ce_post'] = True
+                                doc_source[kg_doc]['in_kg'] = True
+                            else:
+                                doc_source[kg_doc] = {
+                                    'initial_bm25': False,
+                                    'in_laff': False,
+                                    'in_kg': True,
+                                    'kg_ce_post': True,
+                                }
+
+                            sorted_results.pop(0)
+                            kg_merged += 1
+                        else:
+                            break
+
+                    if self.verbose:
+                        print(
+                            f'[KG-POST-CE] qid={qid}: '
+                            f'CE-scored {len(kg_docnos)} KG docs, merged {kg_merged}'
+                        )
+
 
             if self.verbose:
                 final_ranked_docs = [docno for docno, _ in Counter(results).most_common()]
                 top50 = final_ranked_docs[:50]
                 relevant_docs = self.qrels_map.get(str(qid), set())
+                
+                def count_category(flags_dict, mode):
+                    docs = []
+                    for d, flags in flags_dict.items():
+                        if mode == "laff_only":
+                            cond = flags.get("in_laff", False) and not flags.get("in_kg", False)
+                        elif mode == "kg_only":
+                            cond = flags.get("in_kg", False) and not flags.get("in_laff", False)
+                        elif mode == "both":
+                            cond = flags.get("in_laff", False) and flags.get("in_kg", False)
+                        elif mode == "initial_bm25":
+                            cond = flags.get("initial_bm25", False)
+                        elif mode == "kg_ce_post":
+                            cond = flags.get("kg_ce_post", False)
+                        else:
+                            cond = False
 
-                def source_pool_stats(source_name):
-                    docs = [d for d, s in candidate_pool_docs.items() if s == source_name]
+                        if cond:
+                            docs.append(d)
+
                     rel_docs = [d for d in docs if d in relevant_docs]
                     return len(docs), len(rel_docs)
 
-                def source_top50_stats(source_name):
-                    docs = [d for d in top50 if doc_source.get(d, 'unknown') == source_name]
+                def count_top50_category(mode):
+                    docs = []
+                    for d in top50:
+                        flags = doc_source.get(d, {})
+                        if mode == "laff_only":
+                            cond = flags.get("in_laff", False) and not flags.get("in_kg", False)
+                        elif mode == "kg_only":
+                            cond = flags.get("in_kg", False) and not flags.get("in_laff", False)
+                        elif mode == "both":
+                            cond = flags.get("in_laff", False) and flags.get("in_kg", False)
+                        elif mode == "initial_bm25":
+                            cond = flags.get("initial_bm25", False)
+                        elif mode == "kg_ce_post":
+                            cond = flags.get("kg_ce_post", False)
+                        else:
+                            cond = False
+
+                        if cond:
+                            docs.append(d)
+
                     rel_docs = [d for d in docs if d in relevant_docs]
                     return len(docs), len(rel_docs)
 
-                print('\n' + '=' * 74)
-                print(f'[UNION POOL/TOP50] qid={qid}  mode={self.neighbor_mode}')
-                print(f'Candidate pool size: {len(candidate_pool_docs)}')
-                print(f'Final top-50 size  : {len(top50)}')
-                print('-' * 74)
-
-                if self.neighbor_mode == 'union':
-                    labels = ['initial_bm25', 'laff_only', 'kg_only', 'both', 'kg_ce_post']
-                else:
-                    labels = ['initial_bm25', 'kg_laff', 'kg_ce_post']
-
+                print("\n" + "=" * 74)
+                print(f"[POOL/TOP50] qid={qid}  mode={self.neighbor_mode}")
                 print(f'{"source":14s} {"pool":>6s} {"pool_rel":>9s} {"top50":>7s} {"top50_rel":>10s}')
-                print('-' * 74)
+                print("-" * 74)
+
+                labels = [
+                    "initial_bm25",
+                    "laff_only",
+                    "kg_only",
+                    "both",
+                    "kg_ce_post",
+                ]
 
                 for label in labels:
-                    pool_n, pool_rel = source_pool_stats(label)
-                    top_n, top_rel = source_top50_stats(label)
+                    pool_n, pool_rel = count_category(candidate_pool_docs, label)
+                    top_n, top_rel = count_top50_category(label)
                     print(f'{label:14s} {pool_n:6d} {pool_rel:9d} {top_n:7d} {top_rel:10d}')
 
-                print('=' * 74)
+                print("=" * 74)
 
             for rank, (docno, final_score) in enumerate(Counter(results).most_common()):
                 result_builder.extend({
@@ -546,7 +658,7 @@ class ArmKG:
         valid_cluster_heads = [res for res in cluster_heads if res in laff_score_dict]
         crss_enc_scores.extend(results[res] for res in valid_cluster_heads)
 
-        self.estimated_scores = lambda_bm25 * bm25_score + lambda_aff * neigh_support
+        self.estimated_scores = (lambda_bm25 * bm25_score) + (lambda_aff * neigh_support)
 
         if len(crss_enc_scores) > 0:
             score_utility = sum(crss_enc_scores) / len(crss_enc_scores)
