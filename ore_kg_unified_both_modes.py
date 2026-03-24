@@ -207,6 +207,9 @@ class OREAdaptiveKGUnified(pt.Transformer):
                 for docid in initial_results['docno'].tolist()[:self.budget]
             }
 
+            # KG candidates discovered during expansion but not yet scored
+            kg_candidates_seen = {}  # docno -> parent_score
+
             count = 0
             prev_heads = []
 
@@ -384,9 +387,53 @@ class OREAdaptiveKGUnified(pt.Transformer):
                                 if neighbor not in candidate_pool_docs:
                                     candidate_pool_docs[neighbor] = src
 
+                                # Track KG-only docs for post-loop CE scoring
+                                if src == 'kg_only' and neighbor not in kg_candidates_seen:
+                                    kg_candidates_seen[neighbor] = parent_score
+
                 prev_heads = cluster_heads if count > 0 else []
                 count += 1
                 arms = [a for a in arms if not a.is_exhausted()]
+
+            # === POST-LOOP: CE-score top KG candidates and swap into results ===
+            kg_unseen = {d: s for d, s in kg_candidates_seen.items() if d not in results}
+            if kg_unseen:
+                # Pick top-16 KG docs by parent score (most promising)
+                kg_top = sorted(kg_unseen.items(), key=lambda x: x[1], reverse=True)[:self.batch_size]
+                kg_docnos = [d for d, _ in kg_top]
+
+                # CE-score them with MonoT5 + dual encoder
+                with torch.no_grad():
+                    query_vecs = self.dual_encoder.encode_queries([query])[0].reshape(1, -1)
+
+                doc_object = [{'docno': d} for d in kg_docnos]
+                doc_vecs = np.concatenate([
+                    dv.reshape(1, -1)
+                    for dv in self.corpus_index.vec_loader()(pd.DataFrame(doc_object))['doc_vec'].values
+                ])
+                dual_score = (query_vecs.dot(doc_vecs.T))[0]
+
+                batch_df = pd.DataFrame(kg_docnos, columns=['docno'])
+                batch_df['qid'] = qid
+                batch_df['query'] = query
+                kg_ce_scores = list(self.scorer(batch_df)['score'].values)
+                kg_final_scores = [ce + ds for ce, ds in zip(kg_ce_scores, dual_score)]
+
+                # Swap in KG docs that beat the weakest results
+                sorted_results = sorted(results.items(), key=lambda x: x[1])
+                kg_merged = 0
+                for kg_doc, kg_score in sorted(zip(kg_docnos, kg_final_scores), key=lambda x: x[1], reverse=True):
+                    weakest_doc, weakest_score = sorted_results[0]
+                    if kg_score > weakest_score:
+                        del results[weakest_doc]
+                        results[kg_doc] = kg_score
+                        doc_source[kg_doc] = 'kg_ce_post'
+                        sorted_results.pop(0)
+                        kg_merged += 1
+                    else:
+                        break
+                if self.verbose:
+                    print(f'  [KG-POST-CE] qid={qid}: CE-scored {len(kg_docnos)} KG docs, merged {kg_merged} into results (pool={len(kg_unseen)})')
 
             if self.verbose:
                 final_ranked_docs = [docno for docno, _ in Counter(results).most_common()]
@@ -410,9 +457,9 @@ class OREAdaptiveKGUnified(pt.Transformer):
                 print('-' * 74)
 
                 if self.neighbor_mode == 'union':
-                    labels = ['initial_bm25', 'kg_only', 'laff_only', 'both']
+                    labels = ['initial_bm25', 'laff_only', 'kg_only', 'both', 'kg_ce_post']
                 else:
-                    labels = ['initial_bm25', 'kg_laff']
+                    labels = ['initial_bm25', 'kg_laff', 'kg_ce_post']
 
                 print(f'{"source":14s} {"pool":>6s} {"pool_rel":>9s} {"top50":>7s} {"top50_rel":>10s}')
                 print('-' * 74)
