@@ -1,17 +1,17 @@
+import argparse
+import os
+import random
+
 import pyterrier as pt
 import pyterrier_alpha as pta
-from ir_measures import nDCG, R
-import os
+import torch
+from ir_measures import R, nDCG
 from pyterrier_dr import FlexIndex, TasB
 from pyterrier_t5 import MonoT5ReRanker
 
-import torch
-import argparse
-import pandas as pd
-import random
 random.seed(42)
 
-parser = argparse.ArgumentParser(description='ORE Baseline with Debug Stats')
+parser = argparse.ArgumentParser(description='ORE Baseline with total relevant docs in final top 50')
 parser.add_argument('--dl', type=int, default=19)
 parser.add_argument('--budget', type=int, default=100)
 parser.add_argument('--ce', type=int, default=7)
@@ -62,17 +62,23 @@ qrels_map = qrels_df[qrels_df['label'] >= 2].groupby('qid')['docno'].apply(set).
 
 from ore_adaptive_debug import OREAdaptive
 
-ore = OREAdaptive(model, scorer, idx, graph, laff_graph,
-                  budget=args.budget,
-                  cross_enc_budget=args.ce,
-                  param_bounds=(0.25, 0.95),
-                  num_bm25_calls=0,
-                  verbose=args.verbose,
-                  top_s=args.s1,
-                  top_s2=args.s2,
-                  qrels_map=qrels_map)
+ore = OREAdaptive(
+    model,
+    scorer,
+    idx,
+    graph,
+    laff_graph,
+    budget=args.budget,
+    cross_enc_budget=args.ce,
+    param_bounds=(0.25, 0.9),
+    num_bm25_calls=0,
+    verbose=args.verbose,
+    top_s=args.s1,
+    top_s2=args.s2,
+    qrels_map=qrels_map,
+)
 
-save_dir = f'runs/adaptive/dl{args.dl}/ore_debug/'
+save_dir = f'runs/adaptive/dl{args.dl}/ore_top50total/'
 os.makedirs(save_dir, exist_ok=True)
 
 result = pt.Experiment(
