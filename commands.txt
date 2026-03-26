@@ -1,0 +1,29 @@
+activate virtual env : 
+
+source .venv/bin/activate
+
+
+CUDA_VISIBLE_DEVICES=""  python run_experiment_unified_both_modes.py \
+  --dl 20 \
+  --budget 50 \
+  --ce 4 \
+  --alpha 0.0 \
+  --beta 0.3 \
+  --gamma 0.7 \
+  --kg_mode minmax \
+  --kg_neighbor_k 16 \
+  --lk 128 \
+  --passage_el_db passage_entities.db \
+  --freebase_dir freebase \
+  --max_queries 5 \
+  --skip_queries 0 \
+  --verbose
+ ------------------------------------------------------------------------------------------------------------------------
+ 
+ CUDA_VISIBLE_DEVICES="" python run_ore_baseline_debug.py \
+  --dl 20 \
+  --budget 50 \
+  --ce 4 \
+  --max_queries 5 \
+  --skip_queries 0 \
+  --verbose
