@@ -53,7 +53,8 @@ bm25 = pt.terrier.Retriever.from_dataset(
 )
 
 graph = pta.Artifact.from_hf('macavaney/msmarco-passage.corpusgraph.bm25.16')
-laff_graph = pta.Artifact.from_hf('macavaney/msmarco-passage.corpusgraph.bm25.128.laff')
+laff_graph = pta.Artifact.from_hf('macavaney/msmarco-passage.corpusgraph.bm25.128.laff').to_limit_k(16)
+laff_graph_full = pta.Artifact.from_hf('macavaney/msmarco-passage.corpusgraph.bm25.128.laff')
 
 
 scorer = pt.text.get_text(dataset, 'text') >> MonoT5ReRanker(verbose=args.verbose, batch_size=args.batch)
@@ -98,6 +99,7 @@ ore_union = create_ore_kg_union_on_baseline(
     corpus_index=idx,
     graph=graph,
     laff_graph=laff_graph,
+    laff_graph_full=laff_graph_full,
     kg_alpha=args.alpha,
     kg_beta=args.beta,
     kg_gamma=args.gamma,
@@ -116,6 +118,7 @@ ore_union = create_ore_kg_union_on_baseline(
     kg_neighbor_k=args.kg_neighbor_k,
     qrels_map=qrels_map,
 )
+ore_union.track_docno = "2664986"
 
 print('\n' + '=' * 60)
 print('Running Experiment')

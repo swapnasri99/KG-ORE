@@ -24,10 +24,6 @@ from pyterrier_adaptive import CorpusGraph
 import ir_datasets
 import torch
 
-
-
-
-
 dataset_store = ir_datasets.load('msmarco-passage')
 docstore = dataset_store.docs_store()
 
