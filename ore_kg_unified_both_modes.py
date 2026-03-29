@@ -131,7 +131,7 @@ class OREAdaptiveKGUnionOnBaseline(pt.Transformer):
             (n, score, comp)
             for n, score, comp in rescored
             if n not in laff_top_set
-            and comp.entity_overlap > 0
+            and comp.entity_overlap >0.0
         ]
 
         if len(candidates) == 0:

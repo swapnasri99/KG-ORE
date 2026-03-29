@@ -22,14 +22,14 @@ parser.add_argument('--batch', type=int, default=16, help='MonoT5 batch size')
 parser.add_argument('--verbose', action='store_true')
 parser.add_argument('--kg_neighbor_k', type=int, default=16, help='LAFF top-k and KG top-k size inside union expansion')
 parser.add_argument('--alpha', type=float, default=0.0, help='LAFF weight in KG scorer')
-parser.add_argument('--beta', type=float, default=0.3, help='Entity overlap weight')
-parser.add_argument('--gamma', type=float, default=0.7, help='KG connectivity weight')
+parser.add_argument('--beta', type=float, default=0.6, help='Entity overlap weight')
+parser.add_argument('--gamma', type=float, default=0.4, help='KG connectivity weight')
 parser.add_argument('--kg_mode', type=str, default='minmax', help='KG scoring: log, binary, count, coverage, minmax')
 parser.add_argument('--passage_el', type=str, default=None, help='Path to passage entity linking JSONL')
 parser.add_argument('--freebase_dir', type=str, default=None, help='Path to freebase dir')
 parser.add_argument('--query_el', type=str, default=None, help='Path to query EL JSONL (optional)')
 parser.add_argument('--mode', type=str, default='overwrite', choices=['overwrite', 'reuse'])
-parser.add_argument('--correction', type=str, default=None, choices=['bonferroni', 'holm'])
+parser.add_argument('--correction', type=str, default=None, choices=['bonferroni'])
 parser.add_argument('--baseline', type=int, default=None)
 parser.add_argument('--lk', type=int, default=16)
 parser.add_argument('--passage_el_db', type=str, default=None, help='Path to SQLite .db for full corpus EL')
@@ -118,7 +118,7 @@ ore_union = create_ore_kg_union_on_baseline(
     kg_neighbor_k=args.kg_neighbor_k,
     qrels_map=qrels_map,
 )
-ore_union.track_docno = "2664986"
+#ore_union.track_docno = "2664986"
 
 print('\n' + '=' * 60)
 print('Running Experiment')
