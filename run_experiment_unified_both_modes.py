@@ -12,6 +12,14 @@ from pyterrier_t5 import MonoT5ReRanker
 
 random.seed(42)
 
+
+class RemoveColon(pt.Transformer):
+    def transform(self, topics):
+        topics = topics.copy()
+        topics["query"] = topics["query"].str.replace(":", " ", regex=False)
+        return topics
+
+
 parser = argparse.ArgumentParser(description='ORE baseline + union expansion with total relevant docs in final top 50')
 parser.add_argument('--dl', type=int, default=19, help='TREC-DL year: 19 or 20')
 parser.add_argument('--budget', type=int, default=100, help='Re-ranking budget')
@@ -113,12 +121,11 @@ ore_union = create_ore_kg_union_on_baseline(
     top_s=args.s1,
     top_s2=args.s2,
     verbose=args.verbose,
-    param_bounds=(0.25, 0.9),
+    param_bounds=(0.25, 0.95),
     num_bm25_calls=0,
     kg_neighbor_k=args.kg_neighbor_k,
     qrels_map=qrels_map,
 )
-#ore_union.track_docno = "2664986"
 
 print('\n' + '=' * 60)
 print('Running Experiment')
@@ -152,7 +159,7 @@ if args.baseline is not None:
     experiment_kwargs['baseline'] = args.baseline
 
 result = pt.Experiment(
-    [bm25 >> ore_union],
+    [RemoveColon() >> bm25 >> ore_union],
     topics_df,
     qrels_df,
     [nDCG@10, nDCG@args.budget, R(rel=2)@args.budget],

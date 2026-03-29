@@ -70,7 +70,7 @@ ore = OREAdaptive(
     laff_graph,
     budget=args.budget,
     cross_enc_budget=args.ce,
-    param_bounds=(0.25, 0.9),
+    param_bounds=(0.25, 0.95),
     num_bm25_calls=0,
     verbose=args.verbose,
     top_s=args.s1,

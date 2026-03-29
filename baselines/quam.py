@@ -23,7 +23,9 @@ warnings.filterwarnings("ignore",message="WARN org.terrier.querying.ApplyTermPip
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-dataset = pt.get_dataset('irds:msmarco-passage-v2')
+#dataset = pt.get_dataset('irds:msmarco-passage-v2')
+dataset = pt.get_dataset('irds:msmarco-passage')
+
 text_loader = pt.text.get_text(dataset, 'text')
 
 
