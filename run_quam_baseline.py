@@ -64,6 +64,13 @@ exp_name = f'QuAM.c{args.budget}.s{args.s}.ce{args.ce}.lk{args.lk}'
 save_dir = f'runs/adaptive/dl{args.dl}/quam/c{args.budget}_s{args.s}_ce{args.ce}_lk{args.lk}/'
 os.makedirs(save_dir, exist_ok=True)
 
+class RemoveColon(pt.Transformer):
+    def transform(self, topics):
+        topics = topics.copy()
+        topics["query"] = topics["query"].str.replace(":", " ", regex=False)
+        return topics
+
+
 experiment_kwargs = {
     'save_dir': save_dir,
     'save_mode': args.mode,
@@ -72,9 +79,28 @@ experiment_kwargs = {
 if args.correction:
     experiment_kwargs['correction'] = args.correction
 
-result = pt.Experiment(
+"""result = pt.Experiment(
     [
         retriever >> QUAM(
+            scorer=scorer,
+            corpus_graph=laff_graph,
+            num_results=args.budget,
+            cross_enc_budget=args.ce,
+            top_k_docs=args.s,
+            batch_size=args.batch,
+            verbose=args.verbose,
+        ),
+    ],
+    eval_dataset.get_topics(),
+    eval_dataset.get_qrels(),
+    [nDCG @ 10, nDCG @ args.budget, R(rel=2) @ args.budget],
+    names=[exp_name],
+    **experiment_kwargs,
+)
+"""
+result = pt.Experiment(
+    [
+        RemoveColon() >> retriever >> QUAM(
             scorer=scorer,
             corpus_graph=laff_graph,
             num_results=args.budget,
@@ -95,3 +121,4 @@ print('\n' + '=' * 60)
 print(f'Results: QuAM Baseline DL20{args.dl}')
 print('=' * 60)
 print(result.T)
+
