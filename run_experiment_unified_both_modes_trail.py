@@ -152,7 +152,7 @@ parts.append('UNION_ON_BASELINE_TOP50TOTAL')
 exp_name = f"ORE_{'_'.join(parts)}.c{args.budget}.DL{args.dl}"
 
 kg_tag = '_'.join(parts)
-save_dir = f'runs/adaptive/dl{args.dl}/{kg_tag}/'
+save_dir = f'runs/adaptive/dl{args.dl}'
 os.makedirs(save_dir, exist_ok=True)
 
 experiment_kwargs = {

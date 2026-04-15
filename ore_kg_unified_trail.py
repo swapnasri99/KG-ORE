@@ -1,28 +1,4 @@
-"""
-ore_kg_unified_both_modes_v2.py
-───────────────────────────────
-Changes from ore_kg_unified_both_modes.py (clearly marked with # ── CHANGE):
 
-1. _get_union_expansion_neighbors now ALSO returns the bm25_map it already
-   computes internally, so the caller can inject those scores into the main
-   bm25_scores dict.  Zero extra computation.
-
-2. After expansion, we batch-compute BM25(query) for NEW LAFF docs and inject
-   ALL expansion BM25 scores (KG + LAFF) into bm25_scores.  This gives CER
-   real signal instead of bm25=0.
-
-3. CER scheduling adds a BM25 FALLBACK for expansion docs (source=kg/laff)
-   that are NOT in cluster_neigh_lookup.  This is the critical fix: without it
-   KG docs are *by definition* invisible to CER (they come from positions
-   16-127, cluster_neigh uses LAFF-16).
-
-   The fallback ONLY applies to expansion docs (doc_source in 'kg','laff'),
-   so baseline BM25 docs are not affected → baseline behaviour preserved.
-
-All three changes are additive and clearly marked.  The baseline ORE code path
-(initial BM25 docs, LAFF-16 CER scheduling, MonoT5 scoring, lambda fitting)
-is completely untouched.
-"""
 
 from collections import Counter, defaultdict
 from statistics import mean
@@ -104,6 +80,9 @@ def compute_candidate_feature_maps(candidate_pool, cluster_heads, cluster_neigh_
         d: float(exploit_strength * util_norm[d] + (1.0 - exploit_strength) * util_soft[d])
         for d in util_norm
     }
+
+   
+
 
     return {
         'bm25_raw': bm25_raw,
