@@ -3,6 +3,7 @@ import pyterrier_alpha as pta
 from pyterrier.measures import *
 from pyterrier_t5 import MonoT5ReRanker
 import pandas as pd
+from ir_measures import R, nDCG
 # Initialize PyTerrier
 if not pt.started():
     pt.init()
